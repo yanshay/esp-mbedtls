@@ -138,6 +138,10 @@ pub enum TlsError {
     NoClientCertificate,
     /// IO error
     Io(ErrorKind),
+    /// Already Connected
+    AlreadyConnected,
+    /// Not Connected
+    NotConnected,
 }
 
 impl fmt::Display for TlsError {
@@ -153,6 +157,8 @@ impl fmt::Display for TlsError {
             }
             Self::NoClientCertificate => write!(f, "No client certificate"),
             Self::Io(e) => write!(f, "IO error: {e:?}"),
+            Self::AlreadyConnected => write!(f, "Session already connected"),
+            Self::NotConnected => write!(f, "Session not connected"),
         }
     }
 }
@@ -1535,6 +1541,72 @@ pub mod asynch {
             ctx.receive(core::slice::from_raw_parts_mut(buf as *mut _, len))
         }
     }
+
+
+    pub struct ReusedSession {
+        pub(crate) mbedtls_ssl_session: *mut mbedtls_ssl_session,
+    }
+
+    impl ReusedSession {
+        fn drop(&mut self) {
+            unsafe {
+                mbedtls_ssl_session_free(self.mbedtls_ssl_session);
+                free(self.mbedtls_ssl_session as *const _);
+            }
+        }
+    }
+
+    impl<T> Session<'_, T>
+    where
+        T: embedded_io_async::Read + embedded_io_async::Write,
+    {
+        pub async fn connect_reuse(
+            &mut self,
+            reused_session: &ReusedSession,
+        ) -> Result<(), TlsError> {
+            if self.state != SessionState::Initial {
+                return Err(TlsError::AlreadyConnected);
+            }
+            unsafe {
+                let res =
+                    mbedtls_ssl_set_session(self.ssl_context, reused_session.mbedtls_ssl_session);
+                if res != 0 {
+                    return Err(TlsError::MbedTlsError(res));
+                }
+            }
+            self.connect().await
+        }
+    }
+
+    impl<T> Session<'_, T> {
+        pub fn get_mbedtls_session(&self) -> Result<ReusedSession, TlsError> {
+            if self.state != SessionState::Connected {
+                return Err(TlsError::NotConnected);
+            }
+            unsafe {
+                let mbedtls_ssl_session = aligned_calloc(
+                    align_of::<mbedtls_ssl_session>(),
+                    size_of::<mbedtls_ssl_session>(),
+                ) as *mut mbedtls_ssl_session;
+                if mbedtls_ssl_session.is_null() {
+                    return Err(TlsError::OutOfMemory);
+                }
+                mbedtls_ssl_session_init(mbedtls_ssl_session);
+                let res = mbedtls_ssl_get_session(self.ssl_context, mbedtls_ssl_session);
+                if res != 0 {
+                    mbedtls_ssl_session_free(mbedtls_ssl_session);
+                    #[allow(non_snake_case)]
+                    return Err(TlsError::MbedTlsError(res));
+                }
+                //::log::debug!("id_len: {}, ticket_len: {}", (*mbedtls_ssl_session).private_id_len,(*mbedtls_ssl_session).private_ticket_len);
+                //::log::debug!("cipher suite: {:X}", (*mbedtls_ssl_session).private_ciphersuite);
+                //::log::debug!("tls_version: {}", (*mbedtls_ssl_session).private_tls_version);
+                Ok(ReusedSession {
+                    mbedtls_ssl_session,
+                })
+            }
+        }
+    }
 }
 
 /// Outputs the MbedTLS debug messages to the log
@@ -1593,3 +1665,101 @@ unsafe extern "C" fn mbedtls_psa_external_get_random(
     rng(core::ptr::null_mut(), output, out_size);
     0
 }
+
+// Session Resuse Enhancements
+
+// #[cfg(feature = "async")]
+// pub mod asynch {
+//     use super::*;
+//     struct SessionForReuse {
+//         pub(crate) mbedtls_ssl_session: *mut mbedtls_ssl_session,
+//     }
+//
+//     impl SessionForReuse {
+//         // fn new(mbedtls_ssl_session: *mut mbedtls_ssl_session) -> Self {
+//         //     unsafe {
+//         //         let  mbedtls_ssl_session_copy = aligned_calloc(
+//         //             align_of::<mbedtls_ssl_session>(),
+//         //             size_of::<mbedtls_ssl_session>(),
+//         //         ) as *mut mbedtls_ssl_session;
+//         //         if mbedtls_ssl_session_copy.is_null() {
+//         //             return Err(TlsError::OutOfMemory);
+//         //         }
+//         //         mbedtls_ssl_session_init(mbedtls_ssl_session_copy);
+//         //         Self {
+//         //             mbedtls_ssl_session: mbedtls_ssl_session_copy
+//         //         }
+//         //     }
+//         // }
+//         fn drop(&mut self) {
+//             unsafe {
+//                 mbedtls_ssl_session_free(self.mbedtls_ssl_session);
+//                 free(self.mbedtls_ssl_session as *const _);
+//             }
+//         }
+//     }
+//
+//     // pub async fn dum_read(&mut self, buf: &mut [u8]) -> Result<usize, TlsError> {
+//     //     self.connect().await?;
+//     //
+//     //     let len = self
+//     //         .io(|ssl| unsafe {
+//     //             mbedtls_ssl_read(ssl, buf.as_mut_ptr() as *mut _, buf.len() as _)
+//     //         })
+//     //         .await?;
+//     //
+//     //     Ok(len as _)
+//     // }
+//
+//     impl<T> Session<'_, T>
+//     where
+//         T: embedded_io_async::Read + embedded_io_async::Write,
+//     {
+//         pub async fn resume_session(
+//             &mut self,
+//             resumed_session: &SessionForReuse,
+//         ) -> Result<(), TlsError> {
+//             if self.state != SessionState::Initial {
+//                 return Err(TlsError::AlreadyConnected);
+//             }
+//             unsafe {
+//                 let res =
+//                     mbedtls_ssl_set_session(self.ssl_context, resumed_session.mbedtls_ssl_session);
+//                 if res != 0 {
+//                     return Err(TlsError::MbedTlsError(res));
+//                 }
+//             }
+//             self.connect().await?
+//         }
+//     }
+//
+//     impl<T> Session<'_, T> {
+//         pub fn get_mbedtls_session(&self) -> Result<SessionForReuse, TlsError> {
+//             if self.state != SessionState::Connected {
+//                 return Err(TlsError::NotConnected);
+//             }
+//             unsafe {
+//                 let mbedtls_ssl_session = aligned_calloc(
+//                     align_of::<mbedtls_ssl_session>(),
+//                     size_of::<mbedtls_ssl_session>(),
+//                 ) as *mut mbedtls_ssl_session;
+//                 if mbedtls_ssl_session.is_null() {
+//                     return Err(TlsError::OutOfMemory);
+//                 }
+//                 mbedtls_ssl_session_init(mbedtls_ssl_session);
+//                 let res = mbedtls_ssl_get_session(self.ssl_context, mbedtls_ssl_session);
+//                 if res != 0 {
+//                     mbedtls_ssl_session_free(mbedtls_ssl_session);
+//                     #[allow(non_snake_case)]
+//                     return Err(TlsError::MbedTlsError(res));
+//                 }
+//                 //::log::debug!("id_len: {}, ticket_len: {}", (*mbedtls_ssl_session).private_id_len,(*mbedtls_ssl_session).private_ticket_len);
+//                 //::log::debug!("cipher suite: {:X}", (*mbedtls_ssl_session).private_ciphersuite);
+//                 //::log::debug!("tls_version: {}", (*mbedtls_ssl_session).private_tls_version);
+//                 Ok(SessionForReuse {
+//                     mbedtls_ssl_session,
+//                 })
+//             }
+//         }
+//     }
+// }
