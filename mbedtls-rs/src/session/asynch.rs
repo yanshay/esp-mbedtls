@@ -7,10 +7,11 @@ use embedded_io::ErrorKind;
 
 use io::{ErrorType, Read, Write};
 
+use crate::sys::MbedtlsError;
 use crate::sys::*;
 use crate::{SessionError, TlsReference};
 
-use super::{SessionConfig, SessionState};
+use super::{ReusedSession, SessionConfig, SessionState};
 
 /// Re-export of the `embedded-io-async` crate so that users don't have to explicitly depend on it
 /// to use e.g. `write_all` or `read_exact`.
@@ -124,6 +125,27 @@ where
         Ok(())
     }
 
+    /// Negotiate the TLS connection attempting to reuse a previously captured session.
+    pub async fn connect_reuse(
+        &mut self,
+        reused_session: &ReusedSession,
+    ) -> Result<(), SessionError> {
+        if self.connected {
+            return Err(SessionError::AlreadyConnected);
+        }
+
+        let res = merr!(unsafe {
+            mbedtls_ssl_set_session(
+                // &mut *self.state.ssl_context,
+                self.state.ssl_context.0.as_mut(),
+                // &*reused_session.mbedtls_session,
+                reused_session.mbedtls_session.as_ref()
+            )
+        })?;
+
+        self.connect().await
+    }
+
     /// Split the TLS session into read and write halves
     ///
     /// # Returns
@@ -224,6 +246,26 @@ where
         self.connected = false;
 
         Ok(())
+    }
+
+    /// Capture the negotiated MbedTLS session for possible reuse.
+    pub fn get_mbedtls_session(&self) -> Result<ReusedSession, SessionError> {
+        if !self.connected {
+            return Err(SessionError::NotConnected);
+        }
+
+        let mut mbedtls_session : super::super::MBox<mbedtls_ssl_session> =
+            super::super::MBox::new().ok_or(MbedtlsError::new(MBEDTLS_ERR_SSL_ALLOC_FAILED))?;
+
+        merr!(unsafe {
+            mbedtls_ssl_get_session(
+                &*self.state.ssl_context,
+                // &mut *mbedtls_session,
+                mbedtls_session.0.as_mut()
+            )
+        })?;
+
+        Ok(ReusedSession { mbedtls_session })
     }
 }
 
