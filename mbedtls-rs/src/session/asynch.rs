@@ -139,7 +139,7 @@ where
                 // &mut *self.state.ssl_context,
                 self.state.ssl_context.0.as_mut(),
                 // &*reused_session.mbedtls_session,
-                reused_session.mbedtls_session.as_ref()
+                reused_session.mbedtls_session.as_ref(),
             )
         })?;
 
@@ -254,14 +254,14 @@ where
             return Err(SessionError::NotConnected);
         }
 
-        let mut mbedtls_session : super::super::MBox<mbedtls_ssl_session> =
+        let mut mbedtls_session: super::super::MBox<mbedtls_ssl_session> =
             super::super::MBox::new().ok_or(MbedtlsError::new(MBEDTLS_ERR_SSL_ALLOC_FAILED))?;
 
         merr!(unsafe {
             mbedtls_ssl_get_session(
                 &*self.state.ssl_context,
                 // &mut *mbedtls_session,
-                mbedtls_session.0.as_mut()
+                mbedtls_session.0.as_mut(),
             )
         })?;
 
