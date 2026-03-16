@@ -134,7 +134,7 @@ where
             return Err(SessionError::AlreadyConnected);
         }
 
-        let res = merr!(unsafe {
+        merr!(unsafe {
             mbedtls_ssl_set_session(
                 // &mut *self.state.ssl_context,
                 self.state.ssl_context.0.as_mut(),
