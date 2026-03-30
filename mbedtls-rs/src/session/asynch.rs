@@ -7,7 +7,6 @@ use embedded_io::ErrorKind;
 
 use io::{ErrorType, Read, Write};
 
-use crate::sys::MbedtlsError;
 use crate::sys::*;
 use crate::{SessionError, TlsReference};
 

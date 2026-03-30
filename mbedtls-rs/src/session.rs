@@ -315,8 +315,6 @@ impl defmt::Format for SessionError {
         match self {
             Self::MbedTls(e) => defmt::write!(f, "{}", e),
             Self::Io(e) => defmt::write!(f, "IO({:?})", debug2format!(e)),
-            Self::AlreadyConnected => defmt::write!(f, "Session already connected"),
-            Self::NotConnected => defmt::write!(f, "Session not connected"),
         }
     }
 }
