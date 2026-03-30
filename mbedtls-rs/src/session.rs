@@ -11,7 +11,7 @@ mod asynch;
 pub mod blocking;
 
 /// A reusable TLS session state captured from a connected session.
-pub struct ReusedSession {
+pub struct SavedSession {
     pub(crate) mbedtls_session: MBox<mbedtls_ssl_session>,
 }
 
@@ -279,10 +279,6 @@ pub enum SessionError {
     MbedTls(MbedtlsError),
     /// IO error
     Io(ErrorKind),
-    /// Session is already connected
-    AlreadyConnected,
-    /// Session is not connected
-    NotConnected,
 }
 
 impl SessionError {
@@ -309,8 +305,6 @@ impl core::fmt::Display for SessionError {
         match self {
             Self::MbedTls(e) => write!(f, "{}", e),
             Self::Io(e) => write!(f, "IO({:?})", e),
-            Self::AlreadyConnected => write!(f, "Session already connected"),
-            Self::NotConnected => write!(f, "Session not connected"),
         }
     }
 }
